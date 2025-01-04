@@ -1,0 +1,95 @@
+import cv2
+import numpy as np
+import os
+import xlwt
+import imutils
+
+# 對輪廓進行排序。
+def sort_contours(cnts, method="left-to-right"):
+    reverse = False
+    i = 0
+    if method == "right-to-left" or method == "bottom-to-top":
+        reverse = True
+    if method == "top-to-bottom" or method == "bottom-to-top":
+        i = 1
+    boundingBoxes = [cv2.boundingRect(c) for c in cnts]
+    (cnts, boundingBoxes) = zip(*sorted(zip(cnts, boundingBoxes), key=lambda b: b[1][i], reverse=reverse))
+    return (cnts, boundingBoxes)
+
+# 在圖像上繪製輪廓，並在輪廓的中心標記其索引或編號。
+def draw_contour(image, c, i):
+    M = cv2.moments(c)
+    if M["m00"] == 0:
+        return image
+    cX = int(M["m10"] / M["m00"])
+    cY = int(M["m01"] / M["m00"])
+    cv2.putText(image, "#{}".format(i), (cX - 20, cY), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+    return image
+
+# 在圖像中尋找藍色的印章。
+def find_blue_stamp(image):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower_blue = np.array([90, 50, 50])  # 調整下限閾值。
+    upper_blue = np.array([150, 255, 255])  # 調整上限閾值。
+    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+    
+    # 形態學操作，填充印章缺失的部分。
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    
+    return mask
+
+workbook = xlwt.Workbook(encoding='ascii')
+worksheet = workbook.add_sheet("Notice")
+worksheet.write(0, 0, "number")
+worksheet.write(0, 1, "check")
+
+directory_name = "image"
+row_index = 1  # 初始行索引。
+
+# 先讀取所有文件名稱，並按照末兩位數字進行排序。
+file_list = sorted(os.listdir(r"./" + directory_name), key=lambda x: int(x[-6:-4]))
+
+for filename in file_list:
+    num = filename[-6:-4]  # 假設從文件名中提取編號。
+    img = cv2.imread(directory_name + "/" + filename)
+    if img is None:
+        continue
+
+    crop_img = img[2200:2900, 1500:2450]  # 裁剪圖像。
+    mask = find_blue_stamp(crop_img)  # 查找藍色印章。
+
+    cnts = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    
+    if cnts:
+        (cnts, boundingBoxes) = sort_contours(cnts, method="left-to-right")
+
+    clone = crop_img.copy()
+    stamp_found = False
+    merged_contour = None
+
+    for (i, c) in enumerate(cnts):
+        area = cv2.contourArea(c)
+        if area > 500:  # 面積閾值過濾噪聲。
+            if merged_contour is None:
+                merged_contour = c
+            else:
+                merged_contour = cv2.convexHull(np.vstack((merged_contour, c)))
+            stamp_found = True
+
+    if merged_contour is not None:
+        (x, y, w, h) = cv2.boundingRect(merged_contour)
+        cv2.rectangle(clone, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        draw_contour(clone, merged_contour, 1)
+
+    # 資料儲存到Excel。
+    worksheet.write(row_index, 0, num)
+    worksheet.write(row_index, 1, "Yes" if stamp_found else "No")
+    row_index += 1  # 更新行索引。
+
+    cv2.imshow("Result", clone)  # 顯示結果。
+    cv2.waitKey(0)
+
+cv2.destroyAllWindows()
+workbook.save('Notice.xls')  # 儲存Excel文件。
